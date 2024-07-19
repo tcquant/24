@@ -264,7 +264,7 @@ def drawdown_trade(arr):
     return drawdown_val
 
 
-def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
+def generate_trades(futures, ce, pe, io=0, buying='open', selling='close' ,intial_capital=1000000):
     # Define the structures
     put = {'pos': 0, 'movment': [], 'sharpie_ratio': None, 'drawdown': None, 'signal_time': None, 'long_ema': None, 
            'short_ema': None, 'entry_time': None, 'strike': None, 'entry_price': None, 'exit_time': None, 
@@ -277,7 +277,8 @@ def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
     # Initialize trades list
     trades = []
     risk_free_per_min = 0.0
-
+    capital = intial_capital
+    rollover = 0
     for i in range(len(futures) - 1):
         row = futures.iloc[i]
         signal = row['Signal']
@@ -310,9 +311,13 @@ def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
                     if pd.isna(buy_val):
                         call['logs'].append(f"stock is illiquid at {i} and {dt}")
                     else:
-                        call.update({'pos': 1, 'price': var, 'signal_time': row['date_timestamp'], 'long_ema': row['Long_EMA'],
+                        if buy_val > capital:
+                            call['logs'].append(f"capital not sufficient at {i} and {dt}")
+                        else:
+                            capital -= buy_val
+                            call.update({'pos': 1, 'price': var, 'signal_time': row['date_timestamp'], 'long_ema': row['Long_EMA'],
                                      'short_ema': row['Short_EMA'], 'strike': strikes['strike'].iloc[ind],
-                                     'entry_time': dt, 'entry_price': buy_val})
+                                     'entry_time': dt, 'entry_price': buy_val , 'movment': [buy_val]})
                 else:
                     call['logs'].append(f"No strikes on call option at {i}, {dt} and strike: {call['strike']}")
 
@@ -320,7 +325,12 @@ def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
                 strikes = pe[(pe['date_timestamp'] == dt) & (pe['strike'] == put['strike'])]
                 if not strikes.empty:
                     sell_val = strikes[selling].iloc[0]
+                    capital += sell_val
+                    if capital > intial_capital:
+                        rollover += (capital - intial_capital)
+                        capital = intial_capital
                     put.update({'pos': 0, 'exit_time': dt, 'exit_price': sell_val, 'pnl': var - put['entry_price'], 'type': 'PE'})
+                    put['movment'].append(sell_val)
                     if len(put['movment']) > 1 and np.std(put['movment']) != 0:
                         sharpie_ratio = (sell_val - put['entry_price'] - risk_free_per_min * (len(put['movment']) - 1)) / (np.std(put['movment']) + 1)
                     else:
@@ -357,9 +367,13 @@ def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
                     if pd.isna(buy_val):
                         put['logs'].append(f"stock is illiquid at {i} and {dt}")
                     else:
-                        put.update({'pos': 1, 'price': var, 'signal_time': row['date_timestamp'], 'long_ema': row['Long_EMA'],
+                        if buy_val > capital:
+                            put['logs'].append(f"capital not sufficient at {i} and {dt}")
+                        else:
+                            capital -= buy_val
+                            put.update({'pos': 1, 'price': var, 'signal_time': row['date_timestamp'], 'long_ema': row['Long_EMA'],
                                     'short_ema': row['Short_EMA'], 'strike': strikes['strike'].iloc[ind],
-                                    'entry_time': dt, 'entry_price': buy_val})
+                                    'entry_time': dt, 'entry_price': buy_val , 'movment': [buy_val]})
                 else:
                     put['logs'].append(f"No strikes available on put option at {i}, {dt}, {put['strike']}")
 
@@ -367,7 +381,12 @@ def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
                 strikes = ce[(ce['date_timestamp'] == dt) & (ce['strike'] == call['strike'])]
                 if not strikes.empty:
                     sell_val = strikes[selling].iloc[0]
+                    capital += sell_val
+                    if capital > intial_capital:
+                        rollover += (capital - intial_capital)
+                        capital = intial_capital
                     call.update({'pos': 0, 'exit_time': dt, 'exit_price': sell_val, 'pnl': var - call['entry_price'], 'type': 'CE'})
+                    call['movment'].append(sell_val)
                     if len(call['movment']) > 1 and np.std(call['movment']) != 0:
                         sharpie_ratio = (sell_val - call['entry_price'] - risk_free_per_min * (len(call['movment']) - 1)) / (np.std(call['movment']) + 1)
                     else:
@@ -391,7 +410,12 @@ def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
         call_short = ce[(ce['date_timestamp'] == futures.iloc[-1]['date_timestamp']) & (ce['strike'] == call['strike'])]
         if not call_short.empty:
             sell_val = call_short.iloc[0][selling]
+            capital += sell_val
+            if capital > intial_capital:
+                rollover += (capital - intial_capital)
+                capital = intial_capital
             call.update({'pos': 0, 'exit_time': futures.iloc[-1]['date_timestamp'], 'exit_price': sell_val, 'pnl': sell_val - call['entry_price']})
+            call['movment'].append(sell_val)
             if len(call['movment']) > 1 and np.std(call['movment']) != 0:
                 sharpie_ratio = (sell_val - call['entry_price'] - risk_free_per_min * (len(call['movment']) - 1)) / (np.std(call['movment']) + 1)
             else:
@@ -407,7 +431,12 @@ def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
         put_short = pe[(pe['date_timestamp'] == futures.iloc[-1]['date_timestamp']) & (pe['strike'] == put['strike'])]
         if not put_short.empty:
             sell_val = put_short.iloc[0][selling]
+            capital += sell_val
+            if capital > intial_capital:
+                rollover += (capital - intial_capital)
+                capital = intial_capital
             put.update({'pos': 0, 'exit_time': futures.iloc[-1]['date_timestamp'], 'exit_price': sell_val, 'pnl': sell_val - put['entry_price']})
+            put['movment'].append(sell_val)
             if len(put['movment']) > 1 and np.std(put['movment']) != 0:
                 sharpie_ratio = (sell_val - put['entry_price'] - risk_free_per_min * (len(put['movment']) - 1)) / (np.std(put['movment']) + 1)
             else:
@@ -424,7 +453,7 @@ def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
         for i in range(1, len(trades)):
             trades[i]['pnl_sum'] = trades[i - 1]['pnl_sum'] + trades[i]['pnl']
 
-    return trades
+    return trades , capital, rollover
 
 def generate_trades_(futures,ce, pe, initial_capital):
 
