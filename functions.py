@@ -56,7 +56,7 @@ def fetch_expiries(cursor, symbol):
 
 
 
-def fill_missings(futures , long_window = 26, short_window = 9):
+def fill_missings(futures):
     # Generate the full range of timestamps for each day
     start_time = '09:15:00'
     end_time = '15:30:00'
@@ -73,19 +73,19 @@ def fill_missings(futures , long_window = 26, short_window = 9):
     futures = pd.merge(all_date_times_df, futures, on='date_timestamp', how='left')
 
     # Forward and backword fill missing values
-    futures = futures.ffill().bfill()
+    futures = futures.ffill()
 
     # Sort by date_timestamp to maintain order
     futures = futures.sort_values('date_timestamp').reset_index(drop=True)
 
 
 def genrate_signals(futures , long_window = 26, short_window = 9):
-    futures['Short_EMA'] = futures['close'].ewm(span=short_window, adjust=False).mean()
-    futures['Long_EMA'] = futures['close'].ewm(span=long_window, adjust=False).mean()
+    futures['Short_EMA'] = futures['close'].ewm(span=short_window).mean()
+    futures['Long_EMA'] = futures['close'].ewm(span=long_window).mean()
 
     futures['Signal'] = 0 
 
-    for i in range(1, len(futures)):
+    for i in range(26, len(futures)):
         if futures['Short_EMA'].iloc[i] > futures['Long_EMA'].iloc[i] and futures['Short_EMA'].iloc[i-1] <= futures['Long_EMA'].iloc[i-1]:
             futures.at[futures.index[i], 'Signal'] = 1  # Buy signal
         elif futures['Short_EMA'].iloc[i] < futures['Long_EMA'].iloc[i] and futures['Short_EMA'].iloc[i-1] >= futures['Long_EMA'].iloc[i-1]:
@@ -138,7 +138,7 @@ def plot_signals(futures):
     fig.add_trace(sell_signals)
 
     fig.update_layout(
-        title=f'{symbol} EMA Crossover Strategy',
+        title=f'{futures[0]['Symbol']} EMA Crossover Strategy',
         yaxis_title='Price',
         xaxis_title='Date',
         xaxis_rangeslider_visible=False,
@@ -204,30 +204,38 @@ def _plot(futures ):
     return fig   
 
 
+import pandas as pd
+
 def fetch_call_put(options):
 
-    options.drop(columns=['id'],inplace = True)
+    if 'id' in options.columns:
+        options.drop(columns=['id'], inplace=True)
+        
     options.drop_duplicates(inplace=True)
-
     options['date_timestamp'] = pd.to_datetime(options['date_timestamp'])
-    copt = options[options['opt_type']=='CE'].copy()
-    popt = options[options['opt_type']=='PE'].copy()
+    options['liquidity'] = 0
 
-    copt.drop_duplicates(inplace = True)
+    copt = options[options['opt_type'] == 'CE'].copy()
+    popt = options[options['opt_type'] == 'PE'].copy()
 
-    popt.drop_duplicates(inplace = True)
+    copt.drop_duplicates(inplace=True)
+    popt.drop_duplicates(inplace=True)
 
     strike_values = options['strike'].unique()
     all_timestamps = options['date_timestamp'].unique()
 
-    d2c = [[j, i]  for j in all_timestamps for i in strike_values]
+    d2c = [[j, i] for j in all_timestamps for i in strike_values]
+    d2c_df = pd.DataFrame(d2c, columns=['date_timestamp', 'strike'])
 
-    d2c_df = pd.DataFrame(d2c , columns = ['date_timestamp' , 'strike'])
+    ce = pd.merge(d2c_df, copt, on=['date_timestamp', 'strike'], how='left')
+    pe = pd.merge(d2c_df, popt, on=['date_timestamp', 'strike'], how='left')
 
-    ce = pd.merge(d2c_df , copt,on=['date_timestamp','strike'] , how='left')
-    pe = pd.merge(d2c_df , popt,on=['date_timestamp','strike'] , how='left')
+    ce['liquidity'] = 0
+    pe['liquidity'] = 0
 
-    return ce.ffill().bfill() , pe.ffill().bfill() 
+    return ce.ffill(), pe.ffill()
+
+
 
 
 
@@ -242,103 +250,181 @@ def lower_bound(arr, target):
     return low
 
 
+def drawdown_trade(arr):
+    max_val = -10000000000
+    max_index , i = 0 , 0
+    drawdown_val = -10000000000
+    while i < len(arr):
+        if arr[i] > max_val:
+            max_val = arr[i]
+            while i < len(arr) and arr[i]<=max_val:
+                drawdown_val = max(drawdown_val, max_val - arr[i])
+                i += 1
 
-def generate_trades(futures,ce,pe):
+    return drawdown_val
 
+
+def generate_trades(futures, ce, pe, io=0, buying='open', selling='close'):
     # Define the structures
-    put = {'pos': 0, 'signal_time': None, 'long_ema': None, 'short_ema': None, 'entry_time': None, 'strike': None,
-            'entry_price': None, 'exit_time': None, 'exit_price': None , 'pnl': 0 ,'type':None, 'pnl_sum':0 , 'price':None}
-    call = {'pos': 0, 'signal_time': None, 'long_ema': None, 'short_ema': None, 'entry_time': None, 'strike': None,
-            'entry_price': None, 'exit_time': None, 'exit_price': None , 'pnl': 0 ,'type':None, 'pnl_sum':0 , 'price':None}
+    put = {'pos': 0, 'movment': [], 'sharpie_ratio': None, 'drawdown': None, 'signal_time': None, 'long_ema': None, 
+           'short_ema': None, 'entry_time': None, 'strike': None, 'entry_price': None, 'exit_time': None, 
+           'exit_price': None, 'pnl': 0, 'type': None, 'pnl_sum': 0, 'price': None, 'logs': []}
+    
+    call = {'pos': 0, 'movment': [], 'sharpie_ratio': None, 'drawdown': None, 'signal_time': None, 'long_ema': None, 
+            'short_ema': None, 'entry_time': None, 'strike': None, 'entry_price': None, 'exit_time': None, 
+            'exit_price': None, 'pnl': 0, 'type': None, 'pnl_sum': 0, 'price': None, 'logs': []}
 
     # Initialize trades list
     trades = []
+    risk_free_per_min = 0.0
 
     for i in range(len(futures) - 1):
         row = futures.iloc[i]
         signal = row['Signal']
-        price_selector = 1
-        price = futures.iloc[i + 1]['close'] if price_selector == 1 else futures.iloc[i + 1]['open']
+        price = futures.iloc[i + 1]['close']
         dt = futures.iloc[i + 1]['date_timestamp']
 
         if signal == 1:
             if call['pos'] == 0:
-                strikes = ce[ce['date_timestamp'] == dt][['date_timestamp', 'open', 'strike']]
+                strikes = ce[ce['date_timestamp'] == dt][['date_timestamp', 'open', 'close', 'strike', 'liquidity']]
                 if not strikes.empty:
                     strikes.sort_values(by='strike', inplace=True)
                     var = price
                     strikes.reset_index(drop=True, inplace=True)
-                    index = lower_bound(strikes, var)
-                    if index >= len(strikes):  index -= 1
-                    if index > 0:  index -= 1
-                    buy_val = strikes['open'].iloc[index]
-                    call.update({'pos': 1, 'price': row['close'], 'signal_time': row['date_timestamp'], 'long_ema': row['Long_EMA'],
-                                'short_ema': row['Short_EMA'], 'strike': strikes['strike'].iloc[index],
-                                'entry_time': dt, 'entry_price': buy_val})
+                    ind = np.argmin(np.abs(strikes['strike'] - var))
+
+                    buy_val = strikes[buying].iloc[ind]
+
+                    if pd.isna(buy_val):
+                        ce.at[i + 1, 'liquidity'] = ce.at[i, 'liquidity'] + 1
+                    else:
+                        ce.at[i + 1, 'liquidity'] = ce.at[i, 'liquidity']
+
+                    shift, t_io = (1 if io > 0 else -1), io
+                    while t_io != 0:
+                        if pd.notna(strikes['strike'].iloc[ind - t_io]):
+                            buy_val = strikes['close'].iloc[ind - t_io]
+                            break
+                        t_io -= shift
+
+                    if pd.isna(buy_val):
+                        call['logs'].append(f"stock is illiquid at {i} and {dt}")
+                    else:
+                        call.update({'pos': 1, 'price': var, 'signal_time': row['date_timestamp'], 'long_ema': row['Long_EMA'],
+                                     'short_ema': row['Short_EMA'], 'strike': strikes['strike'].iloc[ind],
+                                     'entry_time': dt, 'entry_price': buy_val})
                 else:
-                    print(f'No strikes on call option at {i} and {dt}')
+                    call['logs'].append(f"No strikes on call option at {i}, {dt} and strike: {call['strike']}")
 
             if put['pos'] == 1:
                 strikes = pe[(pe['date_timestamp'] == dt) & (pe['strike'] == put['strike'])]
                 if not strikes.empty:
-                    var = strikes['open'].iloc[0]
-                    put.update({'pos': 0, 'exit_time': dt, 'exit_price': var, 'pnl': var - put['entry_price'], 'type': 'PE'})
+                    sell_val = strikes[selling].iloc[0]
+                    put.update({'pos': 0, 'exit_time': dt, 'exit_price': sell_val, 'pnl': var - put['entry_price'], 'type': 'PE'})
+                    if len(put['movment']) > 1 and np.std(put['movment']) != 0:
+                        sharpie_ratio = (sell_val - put['entry_price'] - risk_free_per_min * (len(put['movment']) - 1)) / (np.std(put['movment']) + 1)
+                    else:
+                        sharpie_ratio = np.nan
+                    drawdown_val = drawdown_trade(put['movment'])
+                    put.update({'sharpie_ratio': sharpie_ratio, 'drawdown': drawdown_val})
                     trades.append(put.copy())
+                    put.update({'logs': [], 'movment': []})
                 else:
-                    print(f'No closing on put option at {i}, {dt}, {put["strike"]}')
+                    put['logs'].append(f"No closing on put option at {i}, {dt}, and strike: {put['strike']}")
 
         elif signal == -1:
             if put['pos'] == 0:
-                strikes = pe[pe['date_timestamp'] == dt][['date_timestamp', 'open', 'strike']]
+                strikes = pe[pe['date_timestamp'] == dt][['date_timestamp', 'open', 'close', 'strike', 'liquidity']]
                 if not strikes.empty:
                     strikes.sort_values(by='strike', inplace=True)
                     var = price
                     strikes.reset_index(drop=True, inplace=True)
-                    index = lower_bound(strikes, var)
-                    if index >= len(strikes):   index -= 1
-                    if index < len(strikes):   index += 1
-                    sell_val = strikes['open'].iloc[index]
-                    put.update({'pos': 1, 'price': row['close'], 'signal_time': row['date_timestamp'], 'long_ema': row['Long_EMA'],
-                                'short_ema': row['Short_EMA'], 'strike': strikes['strike'].iloc[index],
-                                'entry_time': dt, 'entry_price': sell_val})
+                    ind = np.argmin(np.abs(strikes['strike'] - var))
+                    buy_val = strikes[buying].iloc[ind]
+
+                    if pd.isna(buy_val):
+                        pe.at[i + 1, 'liquidity'] = pe.at[i, 'liquidity'] + 1
+                    else:
+                        pe.at[i + 1, 'liquidity'] = pe.at[i, 'liquidity']
+
+                    shift, t_io = (1 if io > 0 else -1), io
+                    while t_io != 0:
+                        if pd.notna(strikes['strike'].iloc[ind + t_io]):
+                            buy_val = strikes['close'].iloc[ind + t_io]
+                            break
+                        t_io -= shift
+
+                    if pd.isna(buy_val):
+                        put['logs'].append(f"stock is illiquid at {i} and {dt}")
+                    else:
+                        put.update({'pos': 1, 'price': var, 'signal_time': row['date_timestamp'], 'long_ema': row['Long_EMA'],
+                                    'short_ema': row['Short_EMA'], 'strike': strikes['strike'].iloc[ind],
+                                    'entry_time': dt, 'entry_price': buy_val})
                 else:
-                    print(f'No strikes on put option at {i} and {dt}')
+                    put['logs'].append(f"No strikes available on put option at {i}, {dt}, {put['strike']}")
+
             if call['pos'] == 1:
                 strikes = ce[(ce['date_timestamp'] == dt) & (ce['strike'] == call['strike'])]
                 if not strikes.empty:
-                    var = strikes['open'].iloc[0]
-                    call.update({'pos': 0, 'exit_time': dt, 'exit_price': var, 'pnl': var - call['entry_price'], 'type': 'CE'})
+                    sell_val = strikes[selling].iloc[0]
+                    call.update({'pos': 0, 'exit_time': dt, 'exit_price': sell_val, 'pnl': var - call['entry_price'], 'type': 'CE'})
+                    if len(call['movment']) > 1 and np.std(call['movment']) != 0:
+                        sharpie_ratio = (sell_val - call['entry_price'] - risk_free_per_min * (len(call['movment']) - 1)) / (np.std(call['movment']) + 1)
+                    else:
+                        sharpie_ratio = np.nan
+                    drawdown_val = drawdown_trade(call['movment'])
+                    call.update({'sharpie_ratio': sharpie_ratio, 'drawdown': drawdown_val})
                     trades.append(call.copy())
+                    call.update({'logs': [], 'movment': []})
                 else:
-                    print(f'No closing on call option at {i}, {dt}, {call["strike"]}')
+                    call['logs'].append(f"No closing on call option at {i}, {dt}, {call['strike']}")
+        else:
+            pe.at[i + 1, 'liquidity'] = pe.at[i, 'liquidity']
+            ce.at[i + 1, 'liquidity'] = ce.at[i, 'liquidity']
+            if call['pos'] == 1:
+                call['movment'].append(ce[(ce['date_timestamp'] == dt) & (ce['strike'] == call['strike'])].iloc[0]['close'])
+            if put['pos'] == 1:
+                put['movment'].append(pe[(pe['date_timestamp'] == dt) & (pe['strike'] == put['strike'])].iloc[0]['close'])
 
     # Final closing for any open positions at the end of the dataset
     if call['pos'] == 1:
         call_short = ce[(ce['date_timestamp'] == futures.iloc[-1]['date_timestamp']) & (ce['strike'] == call['strike'])]
         if not call_short.empty:
-            var = call_short.iloc[0]['close']
-            call.update({'pos': 0, 'exit_time': futures.iloc[-1]['date_timestamp'], 'exit_price': var, 'pnl': var - call['entry_price']})
+            sell_val = call_short.iloc[0][selling]
+            call.update({'pos': 0, 'exit_time': futures.iloc[-1]['date_timestamp'], 'exit_price': sell_val, 'pnl': sell_val - call['entry_price']})
+            if len(call['movment']) > 1 and np.std(call['movment']) != 0:
+                sharpie_ratio = (sell_val - call['entry_price'] - risk_free_per_min * (len(call['movment']) - 1)) / (np.std(call['movment']) + 1)
+            else:
+                sharpie_ratio = np.nan
+            drawdown_val = drawdown_trade(call['movment'])
+            call.update({'sharpie_ratio': sharpie_ratio, 'drawdown': drawdown_val})
             trades.append(call.copy())
+            call.update({'logs': [], 'movment': []})
         else:
-            print('No closing on call option')
+            call['logs'].append(f"No closing on call option at {futures.index[-1]}, {futures.iloc[-1]['date_timestamp']}, {call['strike']}")
 
     if put['pos'] == 1:
         put_short = pe[(pe['date_timestamp'] == futures.iloc[-1]['date_timestamp']) & (pe['strike'] == put['strike'])]
         if not put_short.empty:
-            var = put_short.iloc[0]['close']
-            put.update({'pos': 0, 'exit_time': futures.iloc[-1]['date_timestamp'], 'exit_price': var, 'pnl': var - put['entry_price']})
+            sell_val = put_short.iloc[0][selling]
+            put.update({'pos': 0, 'exit_time': futures.iloc[-1]['date_timestamp'], 'exit_price': sell_val, 'pnl': sell_val - put['entry_price']})
+            if len(put['movment']) > 1 and np.std(put['movment']) != 0:
+                sharpie_ratio = (sell_val - put['entry_price'] - risk_free_per_min * (len(put['movment']) - 1)) / (np.std(put['movment']) + 1)
+            else:
+                sharpie_ratio = np.nan
+            drawdown_val = drawdown_trade(put['movment'])
+            put.update({'sharpie_ratio': sharpie_ratio, 'drawdown': drawdown_val})
             trades.append(put.copy())
+            put.update({'logs': [], 'movment': []})
         else:
-            print('No closing on put option')
+            put['logs'].append(f"No closing on put option at {futures.index[-1]}, {futures.iloc[-1]['date_timestamp']}, {put['strike']}")
 
-    trades[0]['pnl_sum'] = trades[0]['pnl']
-    for i in range(1,len(trades)):
-        trades[i]['pnl_sum'] = trades[i-1]['pnl_sum'] + trades[i]['pnl']
-    
+    if trades:
+        trades[0]['pnl_sum'] = trades[0]['pnl']
+        for i in range(1, len(trades)):
+            trades[i]['pnl_sum'] = trades[i - 1]['pnl_sum'] + trades[i]['pnl']
+
     return trades
-
-
-
 
 def generate_trades_(futures,ce, pe, initial_capital):
 
@@ -508,6 +594,49 @@ def sharpie(trades):
     arr = np.array(list(percentage_pnl.values()))
     mean , std_dev , risk_free_rate = np.mean(arr) , np.std(arr) ,0.0
 
-    sharpe_ratio = (mean - risk_free_rate) / std_dev
+    sharpie_ratio = (mean - risk_free_rate) / std_dev
 
-    return sharpe_ratio
+    return sharpie_ratio
+
+
+
+
+def print_trades(trades, columns_to_print):
+    for trade in trades:
+        output = []
+        if columns_to_print.get('pos', 0):
+            output.append(f"pos {trade['pos']}")
+        if columns_to_print.get('signal_time', 0):
+            output.append(f"signal time {trade['signal_time']}")
+        if columns_to_print.get('long_ema', 0):
+            output.append(f"long_ema {trade['long_ema']}")
+        if columns_to_print.get('short_ema', 0):
+            output.append(f"short_ema {trade['short_ema']}")
+        if columns_to_print.get('entry_time', 0):
+            output.append(f"entry time {trade['entry_time']}")
+        if columns_to_print.get('strike', 0):
+            output.append(f"strike {trade['strike']}")
+        if columns_to_print.get('entry_price', 0):
+            output.append(f"entry price {trade['entry_price']}")
+        if columns_to_print.get('exit_time', 0):
+            output.append(f"exit time {trade['exit_time']}")
+        if columns_to_print.get('exit_price', 0):
+            output.append(f"exit price {trade['exit_price']}")
+        if columns_to_print.get('pnl', 0):
+            output.append(f"pnl {trade['pnl']}")
+        if columns_to_print.get('type', 0):
+            output.append(f"type {trade['type']}")
+        if columns_to_print.get('pnl_sum', 0):
+            output.append(f"pnl_sum {trade['pnl_sum']}")
+        if columns_to_print.get('price', 0):
+            output.append(f"price {trade['price']}")
+        if columns_to_print.get('logs', 0):
+            output.append(f"logs {trade['logs']}")
+        if columns_to_print.get('movment', 0):
+            output.append(f"movment {trade['movment']}")
+        if columns_to_print.get('sharpie_ratio', 0):
+            output.append(f"sharpie_ratio {trade['sharpie_ratio']}")
+        if columns_to_print.get('drawdown', 0):
+            output.append(f"drawdown {trade['drawdown']}")
+        
+        print(', '.join(output))
