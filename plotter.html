@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Security Charting App</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f4f7;
+            color: #333;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+
+        #chart-container {
+            width: 80%;
+            margin: 40px auto;
+            background: #ffffff;
+            border-radius: 20px;
+            padding: 25px;
+            box-shadow: 10px 10px 20px rgba(0, 0, 0, 0.1), 
+                        -10px -10px 20px rgba(255, 255, 255, 0.6);
+        }
+
+        h1 {
+            color: #0077cc;
+            font-size: 24px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        #scatter-plot {
+            width: 100%;
+            height: 500px;
+            border-radius: 15px;
+        }
+
+        #controls {
+            margin: 20px auto;
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        select, input, button {
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+
+        button {
+            background-color: #0077cc;
+            color: white;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+
+        button:hover {
+            background-color: #005fa3;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Multi-Security Interactive Chart</h1>
+
+    <!-- Input Controls for Adding Securities -->
+    <div id="controls">
+        <select id="security-type">
+            <option value="cash">Cash</option>
+            <option value="futures">Futures</option>
+            <option value="options">Options</option>
+        </select>
+
+        <input type="text" id="symbol" placeholder="Symbol (e.g., NIFTY)" list="symbol-list">
+        <datalist id="symbol-list"></datalist>
+
+        <input type="date" id="start-date">
+        <input type="date" id="end-date">
+
+        <input type="text" id="expiry" placeholder="Expiry (for Futures/Options)" list="expiry-list">
+        <datalist id="expiry-list"></datalist>
+
+        <select id="option-type">
+            <option value="">Option Type</option>
+            <option value="call">Call</option>
+            <option value="put">Put</option>
+        </select>
+
+        <input type="number" id="strike" placeholder="Strike Price (for Options)">
+
+        <button onclick="addPlot()">Add Security</button>
+    </div>
+
+    <!-- Chart Container -->
+    <div id="chart-container">
+        <div id="scatter-plot"></div>
+    </div>
+
+    <script>
+        let plotData = [];
+        let layout = {
+            title: "Multi-Security Market Data",
+            xaxis: { title: "Time", tickangle: -45 },
+            yaxis: { title: "Price", showgrid: true },
+            hovermode: "x unified", 
+            dragmode: "pan"
+        };
+
+        function addPlot() {
+            const type = document.getElementById("security-type").value;
+            const symbol = document.getElementById("symbol").value;
+            const startDate = document.getElementById("start-date").value;
+            const endDate = document.getElementById("end-date").value;
+            const expiry = document.getElementById("expiry").value;
+            const optionType = document.getElementById("option-type").value;
+            const strike = document.getElementById("strike").value;
+
+            if (!symbol || !startDate || !endDate) {
+                alert("Please enter Symbol, Start Date, and End Date.");
+                return;
+            }
+
+            let trace = {
+                x: generateTimestamps(startDate, endDate),
+                y: generateYValues(),
+                mode: "lines+markers",
+                name: `${symbol} (${type.toUpperCase()})`,
+                line: { width: 2 },
+                marker: { size: 6, opacity: 0.8 },
+            };
+
+            plotData.push(trace);
+            updateChart();
+        }
+
+        function updateChart() {
+            Plotly.react("scatter-plot", plotData, layout);
+        }
+
+        function generateTimestamps(start, end) {
+            let timestamps = [];
+            let currentTime = new Date(start);
+            let endTime = new Date(end);
+
+            while (currentTime <= endTime) {
+                timestamps.push(currentTime.toISOString().slice(0, 10));
+                currentTime.setDate(currentTime.getDate() + 1);
+            }
+            return timestamps;
+        }
+
+        function generateYValues() {
+            let values = [];
+            let basePrice = Math.random() * 5000 + 1000;
+            
+            for (let i = 0; i < 30; i++) {
+                basePrice += Math.random() * 50 - 25;
+                values.push(Math.max(500, basePrice));
+            }
+            return values;
+        }
+
+        // Fetch Dynamic Data for Dropdowns
+        document.getElementById("symbol").addEventListener("input", async function() {
+            let input = this.value.toUpperCase();
+            let response = await fetch(`/api/get_symbols?query=${input}`);
+            let symbols = await response.json();
+            
+            let datalist = document.getElementById("symbol-list");
+            datalist.innerHTML = symbols.map(sym => `<option value="${sym}">`).join("");
+        });
+
+        document.getElementById("expiry").addEventListener("input", async function() {
+            let symbol = document.getElementById("symbol").value.toUpperCase();
+            if (!symbol) return;
+
+            let response = await fetch(`/api/get_expiries?symbol=${symbol}`);
+            let expiries = await response.json();
+            
+            let datalist = document.getElementById("expiry-list");
+            datalist.innerHTML = expiries.map(exp => `<option value="${exp}">`).join("");
+        });
+
+        document.getElementById("option-type").addEventListener("change", async function() {
+            let symbol = document.getElementById("symbol").value.toUpperCase();
+            let expiry = document.getElementById("expiry").value;
+            let type = this.value;
+            if (!symbol || !expiry || !type) return;
+
+            let response = await fetch(`/api/get_strikes?symbol=${symbol}&expiry=${expiry}&type=${type}`);
+            let strikes = await response.json();
+            
+            document.getElementById("strike").value = strikes.length ? strikes[0] : "";
+        });
+
+    </script>
+</body>
+</html>

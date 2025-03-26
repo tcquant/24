@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi Y-Axis Scatter Plot</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        /* General Styling */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f4f7;
+            color: #333;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* Main Container */
+        #chart-container {
+            width: 80%;
+            margin: 40px auto;
+            background: #ffffff;
+            border-radius: 20px;
+            padding: 25px;
+            box-shadow: 10px 10px 20px rgba(0, 0, 0, 0.1), 
+                        -10px -10px 20px rgba(255, 255, 255, 0.6);
+            transition: all 0.3s ease-in-out;
+        }
+
+        /* Title */
+        h1 {
+            color: #0077cc;
+            font-size: 20px;
+            font-weight: bold;
+            font-family: 'Courier New', Courier, monospace;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+        }
+
+        /* Chart Area */
+        #scatter-plot {
+            width: 140%;
+            height: 500px;
+            border-radius: 15px;
+            box-shadow: inset 4px 4px 10px rgba(0, 0, 0, 0.1), 
+                        inset -4px -4px 10px rgba(255, 255, 255, 0.7);
+        }
+
+        /* Customization Section */
+        #color-controls {
+            margin: 10px auto;
+            display: flex;
+            justify-content: center;
+            gap: 2px;
+            flex-wrap: wrap;
+        }
+
+        .color-picker {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .color-picker label {
+            font-weight: bold;
+        }
+
+        /* Hover Effect */
+        #chart-container:hover {
+            transform: scale(1.015);
+            box-shadow: 12px 12px 30px rgba(0, 0, 0, 0.15), 
+                        -12px -12px 30px rgba(255, 255, 255, 0.7);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Multi Y-Axis Interactive Scatter Plot</h1>
+
+    <!-- Color Selection Controls -->
+    <div id="color-controls">
+        <div class="color-picker">
+            <label for="colorA">User A:</label>
+            <input type="color" id="colorA" value="#00ccff">
+        </div>
+        <div class="color-picker">
+            <label for="colorB">User B:</label>
+            <input type="color" id="colorB" value="#ff6699">
+        </div>
+        <div class="color-picker">
+            <label for="colorC">User C:</label>
+            <input type="color" id="colorC" value="#99ff66">
+        </div>
+        <div class="color-picker">
+            <label for="colorD">User D:</label>
+            <input type="color" id="colorD" value="#ffcc00">
+        </div>
+    </div>
+
+    <!-- Chart Container -->
+    <div id="chart-container">
+        <div id="scatter-plot"></div>
+    </div>
+
+    <script>
+        
+
+        const timestamps = [];
+        let currentTime = new Date(2024, 0, 1, 9, 15); // Start at 09:15 AM
+
+        // Generate timestamps every 1 minute for 180 points
+        for (let i = 0; i < 180; i++) {
+            let hours = currentTime.getHours().toString().padStart(2, '0');
+            let minutes = currentTime.getMinutes().toString().padStart(2, '0');
+            timestamps.push(`${hours}:${minutes}`);
+            currentTime.setMinutes(currentTime.getMinutes() + 1);
+        }
+
+        // Generate random Y-values with smooth trends
+        function generateYValues(length, min, max, variation) {
+            let values = [];
+            let currentValue = Math.floor((min + max) / 2);
+            
+            for (let i = 0; i < length; i++) {
+                currentValue += Math.floor(Math.random() * (variation * 2 + 1)) - variation;
+                currentValue = Math.max(min, Math.min(max, currentValue));
+                values.push(currentValue);
+            }
+            return values;
+        }
+
+        const users = {
+            "User A": { y: generateYValues(180, 1, 50, 3), yAxis: "y", color: "#00ccff" },
+            "User B": { y: generateYValues(180, 1, 60, 4), yAxis: "y2", color: "#ff6699" },
+            "User C": { y: generateYValues(180, 5, 40, 2), yAxis: "y3", color: "#99ff66" },
+            "User D": { y: generateYValues(180, 2, 70, 5), yAxis: "y4", color: "#ffcc00" },
+        };
+
+        function createTraces() {
+            return Object.entries(users).map(([name, data]) => ({
+                x: timestamps,
+                y: data.y,
+                mode: "lines+markers",
+                name: name,
+                line: { shape: "linear", width: 2, color: data.color },
+                marker: { size: 6, color: data.color, opacity: 0.8 },
+                yaxis: data.yAxis,
+                hovertemplate: `<b>${name}</b><br>Time: %{x}<br>Value: %{y}<extra></extra>`
+            }));
+        }
+
+        function updateChart() {
+            Plotly.react("scatter-plot", createTraces(), layout, config);
+        }
+
+        const layout = {
+            title: { text: "Multi Y-Axis Plot (Aligned X-Axis)", font: { color: "#333", size: 20 } },
+            paper_bgcolor: "#ffffff",
+            plot_bgcolor: "#ffffff",
+            xaxis: { title: "Time", tickfont: { color: "#333" }, gridcolor: "#ddd", domain: [0.1, 0.9] },
+
+            yaxis:  { title: "User A", color: "#00ccff", showgrid: false, anchor: "x" },
+            yaxis2: { title: "User B", color: "#ff6699", showgrid: false, anchor: "x", overlaying: "y", side: "right" },
+            yaxis3: { title: "User C", color: "#99ff66", showgrid: false, anchor: "x", overlaying: "y", side: "left", position: 0.05 },
+            yaxis4: { title: "User D", color: "#ffcc00", showgrid: false, anchor: "x", overlaying: "y", side: "right", position: 0.95 },
+
+            hovermode: "x unified",
+            dragmode: "pan"
+        };
+
+        const config = {
+            scrollZoom: true,
+            displayModeBar: true,
+            modeBarButtonsToRemove: ["lasso2d", "select2d"]
+        };
+
+        Plotly.newPlot("scatter-plot", createTraces(), layout, config);
+
+        // Event Listeners for Color Inputs
+        document.querySelectorAll("input[type=color]").forEach(input => {
+            input.addEventListener("input", (e) => {
+                const user = e.target.id.replace("color", "User ");
+                users[user].color = e.target.value;
+                updateChart();
+            });
+        });
+
+    </script>
+
+</body>
+</html>
